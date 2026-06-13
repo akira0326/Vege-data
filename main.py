@@ -1,8 +1,3 @@
-bash
-
-cat /mnt/user-data/outputs/veggie-price-report/main.py
-出力
-
 """
 野菜卸売価格 日次レポート - メインスクリプト
 
@@ -63,7 +58,6 @@ def fetch_today_prices(today: date):
         try:
             pdf_bytes = fetch_kagoshima_pdf(date_str)
         except Exception:
-            # YYYYMMDD形式で無ければ、月初の "MDD" 形式も試す（鹿児島市サイトの一部命名の揺れに対応）
             try:
                 alt_str = f"{target.month}{target.day:02d}"
                 pdf_bytes = fetch_kagoshima_pdf(alt_str)
@@ -119,11 +113,6 @@ def fetch_miyazaki_pdf_path(today: date):
     """
     宮崎中央青果のページから本日分の「青果物市況野菜」PDFのURLを取得し、
     一時ファイルにダウンロードしてそのパスを返す。
-
-    TODO: 実装が必要。
-    https://www.miyaseiren.com/shikyo_data/category/chuou/ をスクレイピングし、
-    本日の日付(YYYYMMDD)を含むリンクテキストから「青果物市況野菜-N.pdf」の
-    URLを特定してダウンロードする。
     """
     import re
     import requests
@@ -134,7 +123,6 @@ def fetch_miyazaki_pdf_path(today: date):
     html = resp.text
 
     date_str = today.strftime("%Y%m%d")
-    # 「宮崎中央青果 YYYYMMDD野菜」というタイトルの直後にあるPDFリンクを探す
     pattern = rf"{date_str}野菜.*?href=\"(https://[^\"]+?\.pdf)\""
     m = re.search(pattern, html, re.DOTALL)
     if not m:
@@ -229,7 +217,6 @@ def build_report(today: date, today_prices: dict, data_dates: dict, history: lis
                 cells.append("<td colspan='4'>データなし</td>")
                 continue
 
-            # 「前日」= このデータ日付より前の、履歴上で最も新しい記録
             prev_price = None
             prev_date = None
             for row in sorted(history, key=lambda r: r["date"], reverse=True):
@@ -341,10 +328,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-完了
-
-上記の内容を、GitHub上のmain.py編集画面で全選択→削除→貼り付けしてください。
-
-貼り付けたら、下にスクロールして「Commit changes」をクリックしてください。その後、もう一度「Actions」タブから手動実行(Run workflow)して、結果を確認しましょう。
-
-
