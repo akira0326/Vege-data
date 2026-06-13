@@ -46,7 +46,7 @@ def fetch_today_prices(today: date):
 
     戻り値:
       results: { "鹿児島": {item: price_per_kg or None, ...}, "宮崎": {...} }
-      data_dates: { "鹿児島": date or None, "宮崎": date or None }  # 実際に取得できたデータの日付
+      data_dates: { "鹿児島": date or None, "宮崎": date or None }
     """
     results = {"鹿児島": {}, "宮崎": {}}
     data_dates = {"鹿児島": None, "宮崎": None}
@@ -58,17 +58,20 @@ def fetch_today_prices(today: date):
         try:
             pdf_bytes = fetch_kagoshima_pdf(date_str)
         except Exception:
-            try:
-                alt_str = f"{target.month}{target.day:02d}"
-                pdf_bytes = fetch_kagoshima_pdf(alt_str)
-            except Exception:
-                continue
+            continue
 
         try:
             kagoshima_prices = extract_kagoshima(pdf_bytes)
+            item_results = {}
             for item in ITEMS:
                 data = kagoshima_prices.get(item)
-                results["鹿児島"][item] = data["中値_円per_kg"] if data else None
+                item_results[item] = data["中値_円per_kg"] if data else None
+
+            if all(v is None for v in item_results.values()):
+                print(f"[警告] 鹿児島PDF ({date_str}): 全品目データなしのためスキップ")
+                continue
+
+            results["鹿児島"] = item_results
             data_dates["鹿児島"] = target
             break
         except Exception as e:
