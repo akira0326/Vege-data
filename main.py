@@ -342,6 +342,7 @@ def main():
 if __name__ == "__main__":
     main()
 完了
+
 上記の内容を、GitHub上のmain.py編集画面で全選択→削除→貼り付けしてください。
 
 貼り付けたら、下にスクロールして「Commit changes」をクリックしてください。その後、もう一度「Actions」タブから手動実行(Run workflow)して、結果を確認しましょう。
