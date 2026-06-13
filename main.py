@@ -1,3 +1,8 @@
+bash
+
+cat /mnt/user-data/outputs/veggie-price-report/main.py
+出力
+
 """
 野菜卸売価格 日次レポート - メインスクリプト
 
@@ -38,46 +43,76 @@ ITEMS = [
 MARKETS = ["鹿児島", "宮崎"]
 
 
-def fetch_today_prices(today: date) -> dict:
+def fetch_today_prices(today: date):
     """
-    本日分の価格を取得する。
-    戻り値: { "鹿児島": {item: price_per_kg or None, ...}, "宮崎": {...} }
+    最新の確定済み価格データを取得する。
+    本日分が未公開の場合（土日や、まだ卸売結果が出ていない当日）は、
+    直近7日間を遡って最初に見つかったデータを使用する。
 
-    NOTE: 宮崎のPDF取得URLは現状「ページをスクレイピングしてその日のリンクを
-    見つける」処理が必要。ここではURL取得部分は別関数(fetch_miyazaki_pdf_path)
-    に委ね、未実装の場合はNoneを返す。
+    戻り値:
+      results: { "鹿児島": {item: price_per_kg or None, ...}, "宮崎": {...} }
+      data_dates: { "鹿児島": date or None, "宮崎": date or None }  # 実際に取得できたデータの日付
     """
     results = {"鹿児島": {}, "宮崎": {}}
+    data_dates = {"鹿児島": None, "宮崎": None}
 
-    # --- 鹿児島 ---
-    date_str = today.strftime("%Y%m%d")
-    try:
-        pdf_bytes = fetch_kagoshima_pdf(date_str)
-        kagoshima_prices = extract_kagoshima(pdf_bytes)
-        for item in ITEMS:
-            data = kagoshima_prices.get(item)
-            results["鹿児島"][item] = data["中値_円per_kg"] if data else None
-    except Exception as e:
-        print(f"[警告] 鹿児島データ取得失敗: {e}")
+    # --- 鹿児島: 本日から最大7日遡って探す ---
+    for offset in range(0, 7):
+        target = today - timedelta(days=offset)
+        date_str = target.strftime("%Y%m%d")
+        try:
+            pdf_bytes = fetch_kagoshima_pdf(date_str)
+        except Exception:
+            # YYYYMMDD形式で無ければ、月初の "MDD" 形式も試す（鹿児島市サイトの一部命名の揺れに対応）
+            try:
+                alt_str = f"{target.month}{target.day:02d}"
+                pdf_bytes = fetch_kagoshima_pdf(alt_str)
+            except Exception:
+                continue
+
+        try:
+            kagoshima_prices = extract_kagoshima(pdf_bytes)
+            for item in ITEMS:
+                data = kagoshima_prices.get(item)
+                results["鹿児島"][item] = data["中値_円per_kg"] if data else None
+            data_dates["鹿児島"] = target
+            break
+        except Exception as e:
+            print(f"[警告] 鹿児島PDF解析失敗 ({date_str}): {e}")
+            continue
+    else:
+        print("[警告] 鹿児島データ取得失敗: 直近7日間でPDFが見つかりませんでした")
         for item in ITEMS:
             results["鹿児島"][item] = None
 
-    # --- 宮崎 ---
-    try:
-        pdf_path = fetch_miyazaki_pdf_path(today)
-        if pdf_path:
+    # --- 宮崎: 本日から最大7日遡って探す ---
+    for offset in range(0, 7):
+        target = today - timedelta(days=offset)
+        try:
+            pdf_path = fetch_miyazaki_pdf_path(target)
+        except Exception as e:
+            print(f"[警告] 宮崎PDFリンク取得失敗 ({target.isoformat()}): {e}")
+            continue
+
+        if not pdf_path:
+            continue
+
+        try:
             miyazaki_prices = extract_miyazaki(pdf_path)
             for item in ITEMS:
                 data = miyazaki_prices.get(item)
                 results["宮崎"][item] = data["中値_円per_kg"] if data else None
-        else:
-            raise RuntimeError("本日分PDFのURLが取得できませんでした")
-    except Exception as e:
-        print(f"[警告] 宮崎データ取得失敗: {e}")
+            data_dates["宮崎"] = target
+            break
+        except Exception as e:
+            print(f"[警告] 宮崎PDF解析失敗 ({target.isoformat()}): {e}")
+            continue
+    else:
+        print("[警告] 宮崎データ取得失敗: 直近7日間でPDFが見つかりませんでした")
         for item in ITEMS:
             results["宮崎"][item] = None
 
-    return results
+    return results, data_dates
 
 
 def fetch_miyazaki_pdf_path(today: date):
@@ -109,23 +144,36 @@ def fetch_miyazaki_pdf_path(today: date):
     pdf_resp = requests.get(pdf_url, timeout=30)
     pdf_resp.raise_for_status()
 
-    tmp_path = "/tmp/miyazaki_today.pdf"
+    tmp_path = f"/tmp/miyazaki_{today.strftime('%Y%m%d')}.pdf"
     with open(tmp_path, "wb") as f:
         f.write(pdf_resp.content)
     return tmp_path
 
 
-def append_to_history(today: date, prices: dict):
-    """本日分を price_history.csv に追記する"""
+def append_to_history(prices: dict, data_dates: dict):
+    """各市場のデータ日付ごとに price_history.csv へ追記する（既存の同一日・同一市場・同一品目の行は重複させない）"""
+    existing = set()
+    if os.path.exists(HISTORY_CSV):
+        with open(HISTORY_CSV, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                existing.add((row["date"], row["market"], row["item"]))
+
     file_exists = os.path.exists(HISTORY_CSV)
     with open(HISTORY_CSV, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if not file_exists:
             writer.writerow(["date", "market", "item", "price_per_kg"])
         for market in MARKETS:
+            d = data_dates.get(market)
+            if d is None:
+                continue
             for item in ITEMS:
+                key = (d.isoformat(), market, item)
+                if key in existing:
+                    continue
                 price = prices[market].get(item)
-                writer.writerow([today.isoformat(), market, item, price if price is not None else ""])
+                writer.writerow([d.isoformat(), market, item, price if price is not None else ""])
 
 
 def load_history() -> list:
@@ -167,32 +215,41 @@ def get_month_average(history: list, year: int, month: int, market: str, item: s
     return round(sum(vals) / len(vals), 1)
 
 
-def build_report(today: date, today_prices: dict, history: list) -> str:
+def build_report(today: date, today_prices: dict, data_dates: dict, history: list) -> str:
     """HTML形式の比較レポートを作成する"""
-    yesterday = today - timedelta(days=1)
-
-    # 先月・前年同月の年月を計算
-    if today.month == 1:
-        last_month_year, last_month = today.year - 1, 12
-    else:
-        last_month_year, last_month = today.year, today.month - 1
-    last_year_year, last_year_month = today.year - 1, today.month
 
     rows_html = ""
     for item in ITEMS:
         cells = []
         for market in MARKETS:
+            d = data_dates.get(market)
             price_today = today_prices[market].get(item)
-            price_yesterday = get_price_on(history, yesterday, market, item)
-            last_month_avg = get_month_average(history, last_month_year, last_month, market, item)
-            last_year_avg = get_month_average(history, last_year_year, last_year_month, market, item)
 
-            if price_today is None:
+            if d is None or price_today is None:
                 cells.append("<td colspan='4'>データなし</td>")
                 continue
 
-            if price_yesterday is not None:
-                diff = price_today - price_yesterday
+            # 「前日」= このデータ日付より前の、履歴上で最も新しい記録
+            prev_price = None
+            prev_date = None
+            for row in sorted(history, key=lambda r: r["date"], reverse=True):
+                if row["market"] == market and row["item"] == item and row["date"] < d.isoformat():
+                    if row["price_per_kg"] is not None:
+                        prev_price = row["price_per_kg"]
+                        prev_date = row["date"]
+                    break
+
+            if today.month == 1:
+                last_month_year, last_month = today.year - 1, 12
+            else:
+                last_month_year, last_month = today.year, today.month - 1
+            last_year_year, last_year_month = today.year - 1, today.month
+
+            last_month_avg = get_month_average(history, last_month_year, last_month, market, item)
+            last_year_avg = get_month_average(history, last_year_year, last_year_month, market, item)
+
+            if prev_price is not None:
+                diff = price_today - prev_price
                 diff_str = f"{diff:+.1f}円"
             else:
                 diff_str = "データ不足"
@@ -209,14 +266,22 @@ def build_report(today: date, today_prices: dict, history: list) -> str:
 
         rows_html += f"<tr><td rowspan='1'><b>{item}</b></td>{''.join(cells)}</tr>\n"
 
+    def market_label(market):
+        d = data_dates.get(market)
+        if d is None:
+            return f"{market}（データなし）"
+        if d == today:
+            return market
+        return f"{market}（{d.strftime('%m/%d')}時点）"
+
     header = (
         "<tr>"
         "<th>品目</th>"
-        "<th colspan='4'>鹿児島</th>"
-        "<th colspan='4'>宮崎</th>"
+        f"<th colspan='4'>{market_label('鹿児島')}</th>"
+        f"<th colspan='4'>{market_label('宮崎')}</th>"
         "</tr>"
         "<tr><th></th>"
-        + "<th>本日</th><th>前日比</th><th>先月平均</th><th>前年同月平均</th>" * 2
+        + "<th>価格</th><th>前回比</th><th>先月平均</th><th>前年同月平均</th>" * 2
         + "</tr>"
     )
 
@@ -229,7 +294,8 @@ def build_report(today: date, today_prices: dict, history: list) -> str:
     </table>
     <p style="font-size:12px;color:#666;">
     ※「データ不足」は、運用開始から十分な期間のデータが蓄積されていないことを示します。<br>
-    ※「データなし」は、当日その品目の取引が無かったことを示します。
+    ※「データなし」は、該当市場の直近7日間にデータが見つからなかったことを示します。<br>
+    ※ 市場名の後の「(MM/DD時点)」は、本日分のデータが未公開のため、直近の確定データを使用していることを示します。
     </p>
     </body></html>
     """
@@ -258,13 +324,14 @@ def main():
 
     print(f"=== {today.isoformat()} 野菜価格レポート処理開始 ===")
 
-    today_prices = fetch_today_prices(today)
-    print("本日の価格:", today_prices)
+    today_prices, data_dates = fetch_today_prices(today)
+    print("取得した価格:", today_prices)
+    print("データ日付:", data_dates)
 
-    append_to_history(today, today_prices)
+    append_to_history(today_prices, data_dates)
     history = load_history()
 
-    html = build_report(today, today_prices, history)
+    html = build_report(today, today_prices, data_dates, history)
 
     subject = f"【野菜卸売価格レポート】{today.strftime('%Y/%m/%d')}"
     send_email(subject, html)
@@ -274,3 +341,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+完了
+上記の内容を、GitHub上のmain.py編集画面で全選択→削除→貼り付けしてください。
+
+貼り付けたら、下にスクロールして「Commit changes」をクリックしてください。その後、もう一度「Actions」タブから手動実行(Run workflow)して、結果を確認しましょう。
+
+
