@@ -2,20 +2,20 @@
 野菜卸売価格 日次レポート - メインスクリプト
 
 処理フロー:
-  1. 鹿児島・宮崎の本日PDFを取得し、9品目の中値(円/kg)を抽出
-  2. data/price_history.csv に本日分を追記
-  3. 履歴CSVから「前日比」「先月平均」「前年同月平均」を計算
-  4. 比較表(HTML)を作成
-  5. メール送信(Gmail SMTP)
+ 1. 鹿児島・宮崎の本日PDFを取得し、9品目の中値(円/kg)を抽出
+ 2. data/price_history.csv に本日分を追記
+ 3. 履歴CSVから「前日比」「先月平均」「前年同月平均」を計算
+ 4. 比較表(HTML)を作成
+ 5. メール送信(Gmail SMTP)
 
 実行方法:
-  python3 main.py
-  （GitHub Actionsから毎日定時実行する想定）
+ python3 main.py
+ （GitHub Actionsから毎日定時実行する想定）
 
 必要な環境変数:
-  GMAIL_ADDRESS    : 送信元Gmailアドレス
-  GMAIL_APP_PASSWORD : Gmailアプリパスワード
-  MAIL_TO          : 送信先メールアドレス
+ GMAIL_ADDRESS    : 送信元Gmailアドレス
+ GMAIL_APP_PASSWORD : Gmailアプリパスワード
+ MAIL_TO          : 送信先メールアドレス
 """
 
 import os
@@ -55,15 +55,12 @@ def fetch_today_prices(today: date):
     for offset in range(0, 7):
         target = today - timedelta(days=offset)
         date_str = target.strftime("%Y%m%d")
+        print(f"[デバッグ] 鹿児島 offset={offset}, date_str={date_str} を試行")
         try:
-            print(f"[デバッグ] 鹿児島 offset={offset}, date_str={date_str} を試行")
             pdf_bytes = fetch_kagoshima_pdf(date_str)
-        except Exception:
-            try:
-                alt_str = f"{target.month}{target.day:02d}"
-                pdf_bytes = fetch_kagoshima_pdf(alt_str)
-            except Exception:
-                continue
+        except Exception as e:
+            print(f"[警告] 鹿児島PDF取得失敗 ({date_str}): {e}")
+            continue
 
         try:
             kagoshima_prices = extract_kagoshima(pdf_bytes)
@@ -149,13 +146,13 @@ def fetch_miyazaki_pdf_path(today: date):
 def append_to_history(prices: dict, data_dates: dict):
     """各市場のデータ日付ごとに price_history.csv へ追記する（既存の同一日・同一市場・同一品目の行は重複させない）"""
     existing = set()
-    if os.path.exists(HISTORY_CSV):
+    file_exists = os.path.exists(HISTORY_CSV)
+    if file_exists:
         with open(HISTORY_CSV, encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 existing.add((row["date"], row["market"], row["item"]))
 
-    file_exists = os.path.exists(HISTORY_CSV)
     with open(HISTORY_CSV, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if not file_exists:
@@ -188,15 +185,6 @@ def load_history() -> list:
     return rows
 
 
-def get_price_on(history: list, target_date: date, market: str, item: str):
-    """指定日の価格を取得（なければNone）"""
-    ds = target_date.isoformat()
-    for row in history:
-        if row["date"] == ds and row["market"] == market and row["item"] == item:
-            return row["price_per_kg"]
-    return None
-
-
 def get_month_average(history: list, year: int, month: int, market: str, item: str):
     """指定の年月の平均価格を計算（データが無ければNone）"""
     vals = []
@@ -214,6 +202,14 @@ def get_month_average(history: list, year: int, month: int, market: str, item: s
 def build_report(today: date, today_prices: dict, data_dates: dict, history: list) -> str:
     """HTML形式の比較レポートを作成する"""
 
+    def market_label(market):
+        d = data_dates.get(market)
+        if d is None:
+            return f"{market}（データなし）"
+        if d == today:
+            return market
+        return f"{market}（{d.strftime('%m/%d')}時点）"
+
     rows_html = ""
     for item in ITEMS:
         cells = []
@@ -226,13 +222,11 @@ def build_report(today: date, today_prices: dict, data_dates: dict, history: lis
                 continue
 
             prev_price = None
-            prev_date = None
             for row in sorted(history, key=lambda r: r["date"], reverse=True):
                 if row["market"] == market and row["item"] == item and row["date"] < d.isoformat():
                     if row["price_per_kg"] is not None:
                         prev_price = row["price_per_kg"]
-                        prev_date = row["date"]
-                    break
+                        break
 
             if today.month == 1:
                 last_month_year, last_month = today.year - 1, 12
@@ -259,15 +253,7 @@ def build_report(today: date, today_prices: dict, data_dates: dict, history: lis
                 f"<td>{last_year_str}</td>"
             )
 
-        rows_html += f"<tr><td rowspan='1'><b>{item}</b></td>{''.join(cells)}</tr>\n"
-
-    def market_label(market):
-        d = data_dates.get(market)
-        if d is None:
-            return f"{market}（データなし）"
-        if d == today:
-            return market
-        return f"{market}（{d.strftime('%m/%d')}時点）"
+        rows_html += f"<tr><td><b>{item}</b></td>{''.join(cells)}</tr>\n"
 
     header = (
         "<tr>"
