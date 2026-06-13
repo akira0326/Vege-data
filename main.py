@@ -56,9 +56,14 @@ def fetch_today_prices(today: date):
         target = today - timedelta(days=offset)
         date_str = target.strftime("%Y%m%d")
         try:
+            print(f"[デバッグ] 鹿児島 offset={offset}, date_str={date_str} を試行")
             pdf_bytes = fetch_kagoshima_pdf(date_str)
         except Exception:
-            continue
+            try:
+                alt_str = f"{target.month}{target.day:02d}"
+                pdf_bytes = fetch_kagoshima_pdf(alt_str)
+            except Exception:
+                continue
 
         try:
             kagoshima_prices = extract_kagoshima(pdf_bytes)
