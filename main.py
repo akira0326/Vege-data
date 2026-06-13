@@ -46,7 +46,7 @@ def fetch_today_prices(today: date):
 
     戻り値:
       results: { "鹿児島": {item: price_per_kg or None, ...}, "宮崎": {...} }
-      data_dates: { "鹿児島": date or None, "宮崎": date or None }
+      data_dates: { "鹿児島": date or None, "宮崎": date or None }  # 実際に取得できたデータの日付
     """
     results = {"鹿児島": {}, "宮崎": {}}
     data_dates = {"鹿児島": None, "宮崎": None}
