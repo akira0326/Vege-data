@@ -147,6 +147,35 @@ def extract_prices(pdf_path: str) -> dict:
     return results
 
 
+def fetch_miyazaki_pdf_path(today):
+    """
+    宮崎中央青果のページから、指定日の「{YYYYMMDD}野菜」PDFのURLを探し、
+    一時ファイルにダウンロードしてそのパスを返す。見つからなければ None。
+    （main.py 側が直近7日を遡って呼び出します）
+    """
+    import requests
+
+    list_url = "https://www.miyaseiren.com/shikyo_data/category/chuou/"
+    resp = requests.get(list_url, timeout=30)
+    resp.raise_for_status()
+    html = resp.text
+
+    date_str = today.strftime("%Y%m%d")
+    pattern = rf'{date_str}野菜.*?href="(https://[^"]+?\.pdf)"'
+    m = re.search(pattern, html, re.DOTALL)
+    if not m:
+        return None
+
+    pdf_url = m.group(1)
+    pdf_resp = requests.get(pdf_url, timeout=30)
+    pdf_resp.raise_for_status()
+
+    tmp_path = f"/tmp/miyazaki_{date_str}.pdf"
+    with open(tmp_path, "wb") as f:
+        f.write(pdf_resp.content)
+    return tmp_path
+
+
 def main():
     if len(sys.argv) < 2:
         print("使い方: python3 miyazaki_parser.py /path/to/file.pdf")
@@ -168,3 +197,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
