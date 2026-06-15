@@ -54,31 +54,32 @@ def to_iso(date_str: str) -> str:
         return ""
 
 
+def _norm_origin(s: str) -> str:
+    """産地表記を全国データ(短縮形)に寄せる。例『宮崎県産』『宮崎県』→『宮崎』"""
+    s = (s or "").strip()
+    for suf in ("県産", "府産", "都産", "道産", "産", "県", "府"):
+        if s.endswith(suf):
+            s = s[: -len(suf)]
+            break
+    return s or "宮崎"
+
+
 def fetch_miyazaki(today: date):
     """
     宮崎市場を既存スクレイパーで取得し、全国データと同じレコード形式へ変換。
     scrapers/miyazaki_parser.py が無い／取得失敗時は空リストを返す（全国分のみで継続）。
     """
     try:
-        from scrapers.miyazaki_parser import extract_prices as extract_miyazaki
+        from scrapers.miyazaki_parser import (
+            extract_prices as extract_miyazaki,
+            fetch_miyazaki_pdf_path,
+        )
     except Exception as e:
         print(f"[情報] 宮崎スクレイパー未使用: {e}")
         return []
 
-    # 既存の宮崎PDF取得ロジック（直近7日遡及）は従来の main.py から流用してください。
-    # ここでは取得関数 fetch_miyazaki_pdf_path(target)->path を想定。
-    try:
-        from datetime import timedelta
-        from miyazaki_fetch import fetch_miyazaki_pdf_path  # 既存の取得関数を切り出した想定
-    except Exception:
-        fetch_miyazaki_pdf_path = None
-
-    records = []
-    if fetch_miyazaki_pdf_path is None:
-        print("[情報] 宮崎PDF取得関数が見つからないためスキップ")
-        return records
-
     from datetime import timedelta
+    records = []
     for offset in range(0, 7):
         target = today - timedelta(days=offset)
         try:
@@ -100,8 +101,9 @@ def fetch_miyazaki(today: date):
             records.append({
                 "date": target.strftime("%Y/%m/%d"),
                 "market": "宮崎", "market_code": "宮崎", "area": "九州",
-                "item": item, "origin": "宮崎",
-                "volume_t": None,
+                "item": item,
+                "origin": _norm_origin(d.get("産地")),  # A・Cには実際の産地として反映
+                "volume_t": d.get("入荷量_t"),
                 "high": None, "mid": d.get("中値_円per_kg"), "low": None,
             })
         if records:
@@ -433,3 +435,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
